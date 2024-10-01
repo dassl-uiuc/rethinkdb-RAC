@@ -2,6 +2,9 @@
 #include "btree/operations.hpp"
 
 #include <stdint.h>
+#include <iostream>
+#include <fstream>
+#include <string>
 
 #include "btree/internal_node.hpp"
 #include "btree/leaf_node.hpp"
@@ -11,25 +14,32 @@
 #include "rdb_protocol/profile.hpp"
 #include "rdb_protocol/store.hpp"
 
-void insert_root(block_id_t root_id, superblock_t* sb) {
+void print_btree(value_sizer_t *sizer, superblock_t *sb, const std::string &output_file);
+
+void insert_root(block_id_t root_id, superblock_t *sb)
+{
     sb->set_root_block_id(root_id);
 }
 
-block_id_t create_stat_block(buf_parent_t parent) {
+block_id_t create_stat_block(buf_parent_t parent)
+{
     buf_lock_t stats_block(parent, alt_create_t::create);
     buf_write_t write(&stats_block);
     // Make the stat block be the default constructed stats block.
-    *static_cast<btree_statblock_t *>(write.get_data_write(BTREE_STATBLOCK_SIZE))
-        = btree_statblock_t();
+    *static_cast<btree_statblock_t *>(write.get_data_write(BTREE_STATBLOCK_SIZE)) = btree_statblock_t();
     return stats_block.block_id();
 }
 
-buf_lock_t get_root(value_sizer_t *sizer, superblock_t *sb) {
+buf_lock_t get_root(value_sizer_t *sizer, superblock_t *sb)
+{
     const block_id_t node_id = sb->get_root_block_id();
 
-    if (node_id != NULL_BLOCK_ID) {
+    if (node_id != NULL_BLOCK_ID)
+    {
         return buf_lock_t(sb->expose_buf(), node_id, access_t::write);
-    } else {
+    }
+    else
+    {
         buf_lock_t lock(sb->expose_buf(), alt_create_t::create);
         {
             buf_write_t write(&lock);
@@ -40,22 +50,68 @@ buf_lock_t get_root(value_sizer_t *sizer, superblock_t *sb) {
     }
 }
 
+buf_lock_t get_root_read(value_sizer_t *sizer, superblock_t *sb)
+{
+    const block_id_t node_id = sb->get_root_block_id();
+
+    if (node_id != NULL_BLOCK_ID)
+    {
+        return buf_lock_t(sb->expose_buf(), node_id, access_t::read);
+    }
+    else
+    {
+        buf_lock_t lock(sb->expose_buf(), alt_create_t::create);
+        {
+            buf_write_t write(&lock);
+            leaf::init(sizer, static_cast<leaf_node_t *>(write.get_data_write()));
+        }
+        insert_root(lock.block_id(), sb);
+        return lock;
+    }
+}
+
+buf_lock_t get_root_read_no_sizer(superblock_t *sb)
+{
+    const block_id_t node_id = sb->get_root_block_id();
+
+    if (node_id != NULL_BLOCK_ID)
+    {
+        return buf_lock_t(sb->expose_buf(), node_id, access_t::read);
+    }
+    else
+    {
+        buf_lock_t lock(sb->expose_buf(), alt_create_t::create);
+        {
+            buf_write_t write(&lock);
+            // leaf::init(sizer, static_cast<leaf_node_t *>(write.get_data_write()));
+        }
+        insert_root(lock.block_id(), sb);
+        return lock;
+    }
+}
+
 // Helper function for `check_and_handle_split()` and `check_and_handle_underfull()`.
 // Detaches all values in the given node if it's an internal node, and calls
 // `detacher` on each value if it's a leaf node.
 void detach_all_children(const node_t *node, buf_parent_t parent,
-                         const value_deleter_t *detacher) {
-    if (node::is_leaf(node)) {
+                         const value_deleter_t *detacher)
+{
+    if (node::is_leaf(node))
+    {
         const leaf_node_t *leaf = reinterpret_cast<const leaf_node_t *>(node);
         // Detach the values that are now in `rbuf` with `buf` as their parent.
-        for (auto it = leaf::begin(*leaf); it != leaf::end(*leaf); ++it) {
+        for (auto it = leaf::begin(*leaf); it != leaf::end(*leaf); ++it)
+        {
             detacher->delete_value(parent, (*it).second);
         }
-    } else {
+    }
+    else
+    {
         const internal_node_t *internal =
             reinterpret_cast<const internal_node_t *>(node);
         // Detach the values that are now in `rbuf` with `buf` as their parent.
-        for (int pair_idx = 0; pair_idx < internal->npairs; ++pair_idx) {
+        for (int pair_idx = 0; pair_idx < internal->npairs; ++pair_idx)
+        {
             block_id_t child_id =
                 internal_node::get_pair_by_index(internal, pair_idx)->lnode;
             parent.detach_child(child_id);
@@ -73,21 +129,27 @@ void check_and_handle_split(value_sizer_t *sizer,
                             buf_lock_t *last_buf,
                             superblock_t *sb,
                             const btree_key_t *key, void *new_value,
-                            const value_deleter_t *detacher) {
+                            const value_deleter_t *detacher)
+{
     {
         buf_read_t buf_read(buf);
         const node_t *node = static_cast<const node_t *>(buf_read.get_data_read());
 
         // If the node isn't full, we don't need to split, so we're done.
-        if (!node::is_internal(node)) { // This should only be called when update_needed.
+        if (!node::is_internal(node))
+        { // This should only be called when update_needed.
             rassert(new_value);
             if (!leaf::is_full(sizer, reinterpret_cast<const leaf_node_t *>(node),
-                               key, new_value)) {
+                               key, new_value))
+            {
                 return;
             }
-        } else {
+        }
+        else
+        {
             rassert(!new_value);
-            if (!internal_node::is_full(reinterpret_cast<const internal_node_t *>(node))) {
+            if (!internal_node::is_full(reinterpret_cast<const internal_node_t *>(node)))
+            {
                 return;
             }
         }
@@ -96,7 +158,8 @@ void check_and_handle_split(value_sizer_t *sizer,
     // If we are splitting the root, we must detach it from sb first.
     // It will later be attached to a newly created root, together with its
     // newly created sibling.
-    if (last_buf->empty()) {
+    if (last_buf->empty())
+    {
         sb->expose_buf().detach_child(buf->block_id());
     }
 
@@ -130,7 +193,8 @@ void check_and_handle_split(value_sizer_t *sizer,
     rbuf.set_recency(buf->get_recency());
 
     // Insert the key that sets the two nodes apart into the parent.
-    if (last_buf->empty()) {
+    if (last_buf->empty())
+    {
         // We're splitting what was previously the root, so create a new root to use as the parent.
         *last_buf = buf_lock_t(sb->expose_buf(), alt_create_t::create);
         {
@@ -146,20 +210,21 @@ void check_and_handle_split(value_sizer_t *sizer,
 
     {
         buf_write_t last_write(last_buf);
-        DEBUG_VAR bool success
-            = internal_node::insert(static_cast<internal_node_t *>(last_write.get_data_write()),
-                                    median,
-                                    buf->block_id(), rbuf.block_id());
+        DEBUG_VAR bool success = internal_node::insert(static_cast<internal_node_t *>(last_write.get_data_write()),
+                                                       median,
+                                                       buf->block_id(), rbuf.block_id());
         rassert(success, "could not insert internal btree node");
     }
 
     // We've split the node; now figure out where the key goes and release the other buf (since we're done with it).
-    if (0 >= btree_key_cmp(key, median)) {
+    if (0 >= btree_key_cmp(key, median))
+    {
         // The key goes in the old buf (the left one).
 
         // Do nothing.
-
-    } else {
+    }
+    else
+    {
         // The key goes in the new buf (the right one).
         buf->swap(rbuf);
     }
@@ -173,19 +238,24 @@ void check_and_handle_underfull(value_sizer_t *sizer,
                                 buf_lock_t *last_buf,
                                 superblock_t *sb,
                                 const btree_key_t *key,
-                                const value_deleter_t *detacher) {
+                                const value_deleter_t *detacher)
+{
     bool node_is_underfull;
     {
-        if (last_buf->empty()) {
+        if (last_buf->empty())
+        {
             // The root node is never underfull.
             node_is_underfull = false;
-        } else {
+        }
+        else
+        {
             buf_read_t buf_read(buf);
             const node_t *const node = static_cast<const node_t *>(buf_read.get_data_read());
             node_is_underfull = node::is_underfull(sizer, node);
         }
     }
-    if (node_is_underfull) {
+    if (node_is_underfull)
+    {
         // Acquire a sibling to merge or level with.
         store_key_t key_in_middle;
         block_id_t sib_node_id;
@@ -193,8 +263,7 @@ void check_and_handle_underfull(value_sizer_t *sizer,
 
         {
             buf_read_t last_buf_read(last_buf);
-            const internal_node_t *parent_node
-                = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
+            const internal_node_t *parent_node = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
             nodecmp_node_with_sib = internal_node::sibling(parent_node, key,
                                                            &sib_node_id,
                                                            &key_in_middle);
@@ -206,24 +275,22 @@ void check_and_handle_underfull(value_sizer_t *sizer,
         bool node_is_mergable;
         {
             buf_read_t sib_buf_read(&sib_buf);
-            const node_t *sib_node
-                = static_cast<const node_t *>(sib_buf_read.get_data_read());
+            const node_t *sib_node = static_cast<const node_t *>(sib_buf_read.get_data_read());
 
 #ifndef NDEBUG
             node::validate(sizer, sib_node);
 #endif
 
             buf_read_t buf_read(buf);
-            const node_t *const node
-                = static_cast<const node_t *>(buf_read.get_data_read());
+            const node_t *const node = static_cast<const node_t *>(buf_read.get_data_read());
             buf_read_t last_buf_read(last_buf);
-            const internal_node_t *parent_node
-                = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
+            const internal_node_t *parent_node = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
 
             node_is_mergable = node::is_mergable(sizer, node, sib_node, parent_node);
         }
 
-        if (node_is_mergable) {
+        if (node_is_mergable)
+        {
             // Merge.
 
             const repli_timestamp_t buf_recency = buf->get_recency();
@@ -232,18 +299,19 @@ void check_and_handle_underfull(value_sizer_t *sizer,
             // Nodes must be passed to merge in ascending order.
             // Make it such that we always merge from sib_buf into buf. It
             // simplifies the code below.
-            if (nodecmp_node_with_sib < 0) {
+            if (nodecmp_node_with_sib < 0)
+            {
                 buf->swap(sib_buf);
             }
 
             bool parent_was_doubleton;
             {
                 buf_read_t last_buf_read(last_buf);
-                const internal_node_t *parent_node
-                    = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
+                const internal_node_t *parent_node = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
                 parent_was_doubleton = internal_node::is_doubleton(parent_node);
             }
-            if (parent_was_doubleton) {
+            if (parent_was_doubleton)
+            {
                 // `buf` will get a new parent below. Detach it from its old one.
                 // We can't detach it later because its value will already have
                 // been changed by then.
@@ -262,8 +330,7 @@ void check_and_handle_underfull(value_sizer_t *sizer,
                     static_cast<const node_t *>(sib_buf_read.get_data_read());
                 detach_all_children(node, buf_parent_t(&sib_buf), detacher);
 
-                const internal_node_t *parent_node
-                    = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
+                const internal_node_t *parent_node = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
                 node::merge(sizer,
                             static_cast<node_t *>(sib_buf_write.get_data_write()),
                             static_cast<node_t *>(buf_write.get_data_write()),
@@ -280,12 +347,15 @@ void check_and_handle_underfull(value_sizer_t *sizer,
             conservative than it needs to be. */
             buf->set_recency(superceding_recency(buf_recency, sib_buf_recency));
 
-            if (!parent_was_doubleton) {
+            if (!parent_was_doubleton)
+            {
                 buf_write_t last_buf_write(last_buf);
                 internal_node::remove(sizer->block_size(),
                                       static_cast<internal_node_t *>(last_buf_write.get_data_write()),
                                       key_in_middle.btree_key());
-            } else {
+            }
+            else
+            {
                 // The parent has only 1 key after the merge (which means that
                 // it's the root and our node is its only child). Insert our
                 // node as the new root.
@@ -293,7 +363,9 @@ void check_and_handle_underfull(value_sizer_t *sizer,
                 last_buf->mark_deleted();
                 insert_root(buf->block_id(), sb);
             }
-        } else {
+        }
+        else
+        {
             // Level.
             store_key_t replacement_key_buffer;
             btree_key_t *replacement_key = replacement_key_buffer.btree_key();
@@ -310,31 +382,35 @@ void check_and_handle_underfull(value_sizer_t *sizer,
                 buf_write_t buf_write(buf);
                 buf_write_t sib_buf_write(&sib_buf);
                 buf_read_t last_buf_read(last_buf);
-                const internal_node_t *parent_node
-                    = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
+                const internal_node_t *parent_node = static_cast<const internal_node_t *>(last_buf_read.get_data_read());
                 // We handle internal and leaf nodes separately because of the
                 // different ways their children have to be detached.
                 // (for internal nodes: call detach_child directly vs. for leaf
                 //  nodes: use the supplied value_deleter_t (which might either
                 //  detach the children as well or do nothing))
-                if (is_internal) {
+                if (is_internal)
+                {
                     std::vector<block_id_t> moved_children;
                     leveled = internal_node::level(sizer->block_size(),
-                            static_cast<internal_node_t *>(buf_write.get_data_write()),
-                            static_cast<internal_node_t *>(sib_buf_write.get_data_write()),
-                            replacement_key, parent_node, &moved_children);
+                                                   static_cast<internal_node_t *>(buf_write.get_data_write()),
+                                                   static_cast<internal_node_t *>(sib_buf_write.get_data_write()),
+                                                   replacement_key, parent_node, &moved_children);
                     // Detach children that have been removed from `sib_buf`:
-                    for (size_t i = 0; i < moved_children.size(); ++i) {
+                    for (size_t i = 0; i < moved_children.size(); ++i)
+                    {
                         sib_buf.detach_child(moved_children[i]);
                     }
-                } else {
+                }
+                else
+                {
                     std::vector<const void *> moved_values;
                     leveled = leaf::level(sizer, nodecmp_node_with_sib,
-                            static_cast<leaf_node_t *>(buf_write.get_data_write()),
-                            static_cast<leaf_node_t *>(sib_buf_write.get_data_write()),
-                            replacement_key, &moved_values);
+                                          static_cast<leaf_node_t *>(buf_write.get_data_write()),
+                                          static_cast<leaf_node_t *>(sib_buf_write.get_data_write()),
+                                          replacement_key, &moved_values);
                     // Detach values that have been removed from `sib_buf`:
-                    for (size_t i = 0; i < moved_values.size(); ++i) {
+                    for (size_t i = 0; i < moved_values.size(); ++i)
+                    {
                         detacher->delete_value(buf_parent_t(&sib_buf),
                                                moved_values[i]);
                     }
@@ -348,7 +424,8 @@ void check_and_handle_underfull(value_sizer_t *sizer,
             buf->set_recency(superceding_recency(
                 sib_buf.get_recency(), buf->get_recency()));
 
-            if (leveled) {
+            if (leveled)
+            {
                 buf_write_t last_buf_write(last_buf);
                 internal_node::update_key(static_cast<internal_node_t *>(last_buf_write.get_data_write()),
                                           key_in_middle.btree_key(),
@@ -365,13 +442,14 @@ void check_and_handle_underfull(value_sizer_t *sizer,
  * This is because it may need to use the superblock for some of its methods.
  * */
 void find_keyvalue_location_for_write(
-        value_sizer_t *sizer,
-        superblock_t *superblock, const btree_key_t *key,
-        repli_timestamp_t timestamp,
-        const value_deleter_t *balancing_detacher,
-        keyvalue_location_t *keyvalue_location_out,
-        profile::trace_t *trace,
-        promise_t<superblock_t *> *pass_back_superblock) THROWS_NOTHING {
+    value_sizer_t *sizer,
+    superblock_t *superblock, const btree_key_t *key,
+    repli_timestamp_t timestamp,
+    const value_deleter_t *balancing_detacher,
+    keyvalue_location_t *keyvalue_location_out,
+    profile::trace_t *trace,
+    promise_t<superblock_t *> *pass_back_superblock) THROWS_NOTHING
+{
     keyvalue_location_out->superblock = superblock;
     keyvalue_location_out->pass_back_superblock = pass_back_superblock;
 
@@ -389,10 +467,12 @@ void find_keyvalue_location_for_write(
     }
 
     // Walk down the tree to the leaf.
-    for (;;) {
+    for (;;)
+    {
         {
             buf_read_t read(&buf);
-            if (!node::is_internal(static_cast<const node_t *>(read.get_data_read()))) {
+            if (!node::is_internal(static_cast<const node_t *>(read.get_data_read())))
+            {
                 break;
             }
         }
@@ -417,11 +497,15 @@ void find_keyvalue_location_for_write(
         // already released it). If we're still at the root or at one of
         // its direct children, we might still want to replace the root, so
         // we can't release the superblock yet.
-        if (!last_buf.empty() && keyvalue_location_out->superblock) {
-            if (pass_back_superblock != nullptr) {
+        if (!last_buf.empty() && keyvalue_location_out->superblock)
+        {
+            if (pass_back_superblock != nullptr)
+            {
                 pass_back_superblock->pulse(superblock);
                 keyvalue_location_out->superblock = nullptr;
-            } else {
+            }
+            else
+            {
                 keyvalue_location_out->superblock->release();
                 keyvalue_location_out->superblock = nullptr;
             }
@@ -464,7 +548,8 @@ void find_keyvalue_location_for_write(
         auto node = static_cast<const leaf_node_t *>(read.get_data_read());
         bool key_found = leaf::lookup(sizer, node, key, tmp.get());
 
-        if (key_found) {
+        if (key_found)
+        {
             keyvalue_location_out->there_originally_was_value = true;
             keyvalue_location_out->value = std::move(tmp);
         }
@@ -475,17 +560,23 @@ void find_keyvalue_location_for_write(
 }
 
 void find_keyvalue_location_for_read(
-        value_sizer_t *sizer,
-        superblock_t *superblock, const btree_key_t *key,
-        keyvalue_location_t *keyvalue_location_out,
-        btree_stats_t *stats, profile::trace_t *trace) {
+    value_sizer_t *sizer,
+    superblock_t *superblock, const btree_key_t *key,
+    keyvalue_location_t *keyvalue_location_out,
+    btree_stats_t *stats, profile::trace_t *trace)
+{
     stats->pm_keys_read.record();
     stats->pm_total_keys_read += 1;
+    std::cout << "printing_btree_here" << std::endl;
+    print_btree(sizer, superblock, "btree_structure.txt");
+    std::cout << "printed_btree completed" << std::endl;
+    // exit(0);
 
     const block_id_t root_id = superblock->get_root_block_id();
     rassert(root_id != SUPERBLOCK_ID);
 
-    if (root_id == NULL_BLOCK_ID) {
+    if (root_id == NULL_BLOCK_ID)
+    {
         // There is no root, so the tree is empty.
         superblock->release();
         return;
@@ -494,7 +585,8 @@ void find_keyvalue_location_for_read(
     buf_lock_t buf;
     {
         PROFILE_STARTER_IF_ENABLED(
-                trace != nullptr, "Acquire a block for read.", trace);;
+            trace != nullptr, "Acquire a block for read.", trace);
+        ;
         buf_lock_t tmp(superblock->expose_buf(), root_id, access_t::read);
         superblock->release();
         buf = std::move(tmp);
@@ -505,14 +597,16 @@ void find_keyvalue_location_for_read(
         buf_read_t read(&buf);
         node::validate(sizer, static_cast<const node_t *>(read.get_data_read()));
     }
-#endif  // NDEBUG
+#endif // NDEBUG
 
-    for (;;) {
+    for (;;)
+    {
         block_id_t node_id;
         {
             buf_read_t read(&buf);
             const void *data = read.get_data_read();
-            if (!node::is_internal(static_cast<const node_t *>(data))) {
+            if (!node::is_internal(static_cast<const node_t *>(data)))
+            {
                 break;
             }
 
@@ -534,7 +628,7 @@ void find_keyvalue_location_for_read(
             buf_read_t read(&buf);
             node::validate(sizer, static_cast<const node_t *>(read.get_data_read()));
         }
-#endif  // NDEBUG
+#endif // NDEBUG
     }
 
     // Got down to the leaf, now probe it.
@@ -542,11 +636,11 @@ void find_keyvalue_location_for_read(
     bool value_found;
     {
         buf_read_t read(&buf);
-        const leaf_node_t *leaf
-            = static_cast<const leaf_node_t *>(read.get_data_read());
+        const leaf_node_t *leaf = static_cast<const leaf_node_t *>(read.get_data_read());
         value_found = leaf::lookup(sizer, leaf, key, value.get());
     }
-    if (value_found) {
+    if (value_found)
+    {
         keyvalue_location_out->buf = std::move(buf);
         keyvalue_location_out->there_originally_was_value = true;
         keyvalue_location_out->value = std::move(value);
@@ -554,16 +648,18 @@ void find_keyvalue_location_for_read(
 }
 
 void apply_keyvalue_change(
-        value_sizer_t *sizer,
-        keyvalue_location_t *kv_loc,
-        const btree_key_t *key, repli_timestamp_t tstamp,
-        const value_deleter_t *balancing_detacher,
-        delete_mode_t delete_mode) {
+    value_sizer_t *sizer,
+    keyvalue_location_t *kv_loc,
+    const btree_key_t *key, repli_timestamp_t tstamp,
+    const value_deleter_t *balancing_detacher,
+    delete_mode_t delete_mode)
+{
     /* how much this keyvalue change affects the total population of the btree
      * (should be -1, 0 or 1) */
     int population_change;
 
-    if (kv_loc->value.has()) {
+    if (kv_loc->value.has())
+    {
         // We have a value to insert.
 
         // Split the node if necessary, to make sure that we have room
@@ -582,9 +678,12 @@ void apply_keyvalue_change(
 #endif
         }
 
-        if (kv_loc->there_originally_was_value) {
+        if (kv_loc->there_originally_was_value)
+        {
             population_change = 0;
-        } else {
+        }
+        else
+        {
             population_change = 1;
         }
 
@@ -604,12 +703,16 @@ void apply_keyvalue_change(
                          tstamp,
                          previous_leaf_recency);
         }
-    } else {
+    }
+    else
+    {
         // Delete the value if it's there.
         if (kv_loc->there_originally_was_value ||
-                delete_mode != delete_mode_t::REGULAR_QUERY) {
+            delete_mode != delete_mode_t::REGULAR_QUERY)
+        {
             const repli_timestamp_t previous_leaf_recency = kv_loc->buf.get_recency();
-            if (delete_mode != delete_mode_t::ERASE) {
+            if (delete_mode != delete_mode_t::ERASE)
+            {
                 /* Update the leaf node's recency to the greater of its previous recency
                 and the deletion's recency, to maintain the invariant that its recency is
                 greater than or equal to that of any entry pair in it. */
@@ -620,28 +723,36 @@ void apply_keyvalue_change(
             {
                 buf_write_t write(&kv_loc->buf);
                 auto leaf_node = static_cast<leaf_node_t *>(write.get_data_write());
-                switch (delete_mode) {
-                    case delete_mode_t::REGULAR_QUERY:   /* fall through */
-                    case delete_mode_t::MAKE_TOMBSTONE: {
-                        leaf::remove(sizer,
-                             leaf_node,
-                             key,
-                             tstamp,
-                             previous_leaf_recency);
-                    } break;
-                    case delete_mode_t::ERASE: {
-                        leaf::erase_presence(sizer,
-                            leaf_node,
-                            key);
-                    } break;
-                    default: unreachable();
+                switch (delete_mode)
+                {
+                case delete_mode_t::REGULAR_QUERY: /* fall through */
+                case delete_mode_t::MAKE_TOMBSTONE:
+                {
+                    leaf::remove(sizer,
+                                 leaf_node,
+                                 key,
+                                 tstamp,
+                                 previous_leaf_recency);
                 }
-
+                break;
+                case delete_mode_t::ERASE:
+                {
+                    leaf::erase_presence(sizer,
+                                         leaf_node,
+                                         key);
+                }
+                break;
+                default:
+                    unreachable();
+                }
             }
         }
-        if (kv_loc->there_originally_was_value) {
+        if (kv_loc->there_originally_was_value)
+        {
             population_change = -1;
-        } else {
+        }
+        else
+        {
             population_change = 0;
         }
     }
@@ -654,12 +765,95 @@ void apply_keyvalue_change(
     // Modify the stats block.  The stats block is detached from the rest of the
     // btree, we don't keep a consistent view of it, so we pass the txn as its
     // parent.
-    if (kv_loc->stat_block != NULL_BLOCK_ID) {
+    if (kv_loc->stat_block != NULL_BLOCK_ID)
+    {
         buf_lock_t stat_block(buf_parent_t(kv_loc->buf.txn()),
                               kv_loc->stat_block, access_t::write);
         buf_write_t stat_block_write(&stat_block);
         auto stat_block_buf = static_cast<btree_statblock_t *>(
-                stat_block_write.get_data_write(BTREE_STATBLOCK_SIZE));
+            stat_block_write.get_data_write(BTREE_STATBLOCK_SIZE));
         stat_block_buf->population += population_change;
     }
+}
+
+// Helper function to print node information in a tree format.
+// Now accepts block_id_t block_id as a parameter.
+void print_node(std::ofstream &out, block_id_t block_id, bool is_internal, int depth, const node_t *node, value_sizer_t *sizer)
+{
+    // Add indentation based on depth level.
+    for (int i = 0; i < depth; ++i)
+    {
+        out << "    "; // Indent with 4 spaces per level.
+    }
+    if (is_internal)
+    {
+        out << "|-- Internal Node (ID: " << block_id << ")" << std::endl;
+    }
+    else
+    {
+        out << "|-- Leaf Node (ID: " << block_id << ")" << std::endl;
+        const leaf_node_t *leaf = reinterpret_cast<const leaf_node_t *>(node);
+
+        FILE *fp = fopen("leaf_node_structure.txt", "a");
+        if (fp)
+        {
+            leaf::print(fp, sizer, leaf);
+            fclose(fp);
+        }
+        else
+        {
+            std::cerr << "Error: Could not open leaf_node_structure.txt" << std::endl;
+        }
+    }
+}
+
+// Recursive function to traverse the B-tree and print the nodes in a tree format.
+void traverse_and_print(std::ofstream &out, buf_lock_t *buf, value_sizer_t *sizer, int depth)
+{
+    std::cout << "traverse_and_print" << depth << std::endl;
+    // Read the current node from the buffer.
+    buf_read_t buf_read(buf);
+    const node_t *node = static_cast<const node_t *>(buf_read.get_data_read());
+
+    // Check if the node is an internal node or a leaf node.
+    bool is_internal = node::is_internal(node);
+
+    // Print the current node with its depth in a tree-like format.
+    print_node(out, buf->block_id(), is_internal, depth, node, sizer);
+
+    if (is_internal)
+    {
+        const internal_node_t *internal_node = reinterpret_cast<const internal_node_t *>(node);
+        for (int pair_idx = 0; pair_idx < internal_node->npairs; ++pair_idx)
+        {
+            block_id_t child_id = internal_node::get_pair_by_index(internal_node, pair_idx)->lnode;
+            buf_lock_t child_buf(buf, child_id, access_t::read);
+            traverse_and_print(out, &child_buf, sizer, depth + 1); // Increase depth for child nodes.
+        }
+    }
+}
+
+// Entry function to print the B-tree structure.
+void print_btree(value_sizer_t *sizer, superblock_t *sb, const std::string &output_file)
+{
+    // Open the output file for writing the tree structure.
+    std::ofstream out(output_file, std::ios::app);
+    if (!out.is_open())
+    {
+        std::cerr << "Error: Unable to open file: " << output_file << std::endl;
+        return;
+    }
+
+    // Acquire the root of the B-tree.
+    std::cout << "Acquiring root of the B-tree..." << std::endl;
+    buf_lock_t root_buf = get_root_read(sizer, sb);
+
+    // Traverse the tree starting from the root and print all nodes in a tree-like structure.
+    std::cout << "Printing B-tree structure..." << std::endl;
+    out << "B-tree Structure:" << std::endl;
+    traverse_and_print(out, &root_buf, sizer, 0); // Start at depth 0 (root level).
+
+    // Close the output file.
+    out.close();
+    std::cout << "B-tree structure written to file: " << output_file << std::endl;
 }
