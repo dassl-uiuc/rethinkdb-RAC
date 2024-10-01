@@ -20,24 +20,30 @@
 
 /* This is the main entry point for performing B-tree operations. */
 
-namespace profile {
-class trace_t;
+namespace profile
+{
+    class trace_t;
 }
 
 class buf_parent_t;
 class cache_t;
 class value_deleter_t;
 
-enum cache_snapshotted_t { CACHE_SNAPSHOTTED_NO, CACHE_SNAPSHOTTED_YES };
+enum cache_snapshotted_t
+{
+    CACHE_SNAPSHOTTED_NO,
+    CACHE_SNAPSHOTTED_YES
+};
 
 /* An abstract superblock provides the starting point for performing B-tree operations.
 This makes it so that the B-tree code doesn't actually have to know about the format of
 the superblock, or about anything else that might be contained in the superblock besides
 the root block ID and the stat block ID. */
-class superblock_t {
+class superblock_t
+{
 public:
-    superblock_t() { }
-    virtual ~superblock_t() { }
+    superblock_t() {}
+    virtual ~superblock_t() {}
     // Release the superblock if possible (otherwise do nothing)
     virtual void release() = 0;
 
@@ -58,17 +64,23 @@ private:
     DISABLE_COPYING(superblock_t);
 };
 
-class keyvalue_location_t {
+class keyvalue_location_t
+{
 public:
     keyvalue_location_t()
         : superblock(nullptr), pass_back_superblock(nullptr),
-          there_originally_was_value(false), stat_block(NULL_BLOCK_ID) { }
+          there_originally_was_value(false), stat_block(NULL_BLOCK_ID) {}
 
-    ~keyvalue_location_t() {
-        if (superblock != nullptr) {
-            if (pass_back_superblock != nullptr) {
+    ~keyvalue_location_t()
+    {
+        if (superblock != nullptr)
+        {
+            if (pass_back_superblock != nullptr)
+            {
                 pass_back_superblock->pulse(superblock);
-            } else {
+            }
+            else
+            {
                 superblock->release();
             }
         }
@@ -95,8 +107,8 @@ public:
     // Stat block when modifications are made using this class the statblock is
     // update.
     block_id_t stat_block;
-private:
 
+private:
     DISABLE_COPYING(keyvalue_location_t);
 };
 
@@ -119,6 +131,9 @@ void check_and_handle_underfull(value_sizer_t *sizer,
 /* Set sb to have root id as its root block and release sb */
 void insert_root(block_id_t root_id, superblock_t *sb);
 
+buf_lock_t get_root_read(value_sizer_t *sizer, superblock_t *sb);
+buf_lock_t get_root_read_no_sizer(superblock_t *sb);
+
 /* Create a stat block suitable for storing in a superblock and returning from
 `get_stat_block_id()`. */
 block_id_t create_stat_block(buf_parent_t parent);
@@ -127,26 +142,27 @@ block_id_t create_stat_block(buf_parent_t parent);
  * pulsed by the time `find_keyvalue_location_for_write` returns. In some cases,
  * the superblock is returned only when `*keyvalue_location_out` gets destructed. */
 void find_keyvalue_location_for_write(
-        value_sizer_t *sizer,
-        superblock_t *superblock,
-        const btree_key_t *key,
-        repli_timestamp_t timestamp,
-        const value_deleter_t *balancing_detacher,
-        keyvalue_location_t *keyvalue_location_out,
-        profile::trace_t *trace,
-        promise_t<superblock_t *> *pass_back_superblock = nullptr) THROWS_NOTHING;
+    value_sizer_t *sizer,
+    superblock_t *superblock,
+    const btree_key_t *key,
+    repli_timestamp_t timestamp,
+    const value_deleter_t *balancing_detacher,
+    keyvalue_location_t *keyvalue_location_out,
+    profile::trace_t *trace,
+    promise_t<superblock_t *> *pass_back_superblock = nullptr) THROWS_NOTHING;
 
 void find_keyvalue_location_for_read(
-        value_sizer_t *sizer,
-        superblock_t *superblock,
-        const btree_key_t *key,
-        keyvalue_location_t *keyvalue_location_out,
-        btree_stats_t *stats,
-        profile::trace_t *trace);
+    value_sizer_t *sizer,
+    superblock_t *superblock,
+    const btree_key_t *key,
+    keyvalue_location_t *keyvalue_location_out,
+    btree_stats_t *stats,
+    profile::trace_t *trace);
 
 /* `delete_mode_t` controls how `apply_keyvalue_change()` acts when `kv_loc->value` is
 empty. */
-enum class delete_mode_t {
+enum class delete_mode_t
+{
     /* If there was a value before, remove it and add a tombstone. (If `tstamp` is less
     than the cutpoint, no tombstone will be added.) Otherwise, do nothing. This mode is
     used for regular delete queries. */
@@ -161,11 +177,14 @@ enum class delete_mode_t {
 };
 
 void apply_keyvalue_change(
-        value_sizer_t *sizer,
-        keyvalue_location_t *kv_loc,
-        const btree_key_t *key,
-        repli_timestamp_t tstamp,
-        const value_deleter_t *balancing_detacher,
-        delete_mode_t delete_mode);
+    value_sizer_t *sizer,
+    keyvalue_location_t *kv_loc,
+    const btree_key_t *key,
+    repli_timestamp_t tstamp,
+    const value_deleter_t *balancing_detacher,
+    delete_mode_t delete_mode);
 
-#endif  // BTREE_OPERATIONS_HPP_
+void print_node(std::ofstream &out, block_id_t block_id, bool is_internal, int depth, const node_t *node);
+void traverse_and_print(std::ofstream &out, buf_lock_t *buf, int depth);
+void print_btree(superblock_t *sb, const std::string &output_file);
+#endif // BTREE_OPERATIONS_HPP_
