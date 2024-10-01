@@ -18,6 +18,7 @@
 std::atomic<int> access_counter(0);
 // Mutex to ensure only one thread performs the operation
 std::mutex mtx;
+std::atomic<bool> tree_print(false);
 
 void print_btree_structure(superblock_t *sb, const std::string &output_file);
 
@@ -79,8 +80,8 @@ continue_bool_t btree_depth_first_traversal(
         return continue_bool_t::CONTINUE;
     }
 
-    std::cout << "btree_depth_first_traversal_1\n";
-    print_btree_structure(superblock, "btree_structure.txt");
+    // std::cout << "btree_depth_first_traversal_1\n";
+    print_btree_structure(superblock, "/mydata/btree_structure.txt");
 
     const btree_key_t *left_excl_or_null;
     store_key_t left_excl_buf(range.left);
@@ -204,7 +205,7 @@ continue_bool_t btree_depth_first_traversal(
 {
     bool skip;
 
-    std::cout << "btree_depth_first_traversal_2\n";
+    // std::cout << "btree_depth_first_traversal_2\n";
     if (continue_bool_t::ABORT == cb->filter_range_ts(
                                       left_excl_or_null, right_incl, block->lock.get_recency(), interruptor,
                                       &skip))
@@ -424,10 +425,14 @@ void print_btree_structure(superblock_t *sb, const std::string &output_file)
         return;
     }
     int current_count = ++access_counter;
-    std::cout << "Access counter: " << current_count << std::endl;
-
-    if (current_count == 100)
+    if (current_count % 1000 == 0 && !(tree_print.load()))
     {
+        std::cout << "Access counter: " << current_count << std::endl;
+    }
+
+    if (current_count >= 10000 && !(tree_print.load()))
+    {
+        tree_print.store(true);
         std::lock_guard<std::mutex> lock(mtx);
         std::cout << "Access counter: " << std::endl;
 
