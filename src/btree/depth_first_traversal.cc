@@ -16,6 +16,7 @@
 
 // Shared atomic counter across threads
 std::atomic<int> access_counter(0);
+std::atomic<int> print_counter(0);
 // Mutex to ensure only one thread performs the operation
 std::mutex mtx;
 std::atomic<bool> tree_print(false);
@@ -417,14 +418,24 @@ void traverse_btree_and_print(std::ofstream &out, buf_lock_t *buf, int depth)
 // Entry function to print the entire B-tree structure including all internal and leaf nodes.
 void print_btree_structure(superblock_t *sb, const std::string &output_file)
 {
-    // Open the output file for appending the B-tree structure.
-    std::ofstream out(output_file, std::ios::app);
-    if (!out.is_open())
-    {
-        std::cerr << "Error: Unable to open file: " << output_file << std::endl;
-        return;
-    }
     int current_count = ++access_counter;
+
+    FILE *fp = fopen("/mydata/dump_file", "r");
+    if (fp != NULL)
+    {
+        // std::lock_guard<std::mutex> lock(mtx);
+        fclose(fp);
+        if (remove("/mydata/dump_file") == 0)
+        {
+            std::cout << "Dump file removed." << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Unable to remove dump file." << std::endl;
+        }
+        tree_print.store(false);
+    }
+
     if (current_count % 1000 == 0 && !(tree_print.load()))
     {
         std::cout << "Access counter: " << current_count << std::endl;
@@ -432,9 +443,16 @@ void print_btree_structure(superblock_t *sb, const std::string &output_file)
 
     if (current_count >= 10000 && !(tree_print.load()))
     {
-        tree_print.store(true);
         std::lock_guard<std::mutex> lock(mtx);
-        std::cout << "Access counter: " << std::endl;
+        tree_print.store(true);
+        std::string output_filename = "/mydata/btree_structure" + std::to_string(current_count) + ".txt";
+        std::ofstream out(output_filename, std::ios::app);
+        if (!out.is_open())
+        {
+            std::cerr << "Error: Unable to open file: " << output_file << std::endl;
+            return;
+        }
+        std::cout << "Access counter: " << current_count << std::endl;
 
         // Acquire the root of the B-tree.
         std::cout << "Acquiring root of the B-tree..." << std::endl;
